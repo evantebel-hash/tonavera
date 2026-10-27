@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>MyMusic / TONAVERA — Masuk dengan Google</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      background-color: #0b0f14;
+      color: #e2e8f0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      display: flex; align-items: center; justify-content: center;
+      height: 100vh; margin: 0; padding: 20px;
+    }
+    .card {
+      background: #141b22; border: 1px solid rgba(255, 255, 255, 0.08); border-top: 3px solid #10b981;
+      border-radius: 16px; padding: 36px 32px; text-align: center;
+      max-width: 440px; width: 100%; box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+    }
+    .wordmark { font-size: 26px; font-weight: 700; letter-spacing: 0.02em; color: #f8fafc; margin-bottom: 4px; }
+    .wordmark span { color: #10b981; }
+    h1 { margin: 16px 0 8px; font-size: 19px; font-weight: 600; color: #f8fafc; }
+    p { color: #94a3b8; font-size: 14px; line-height: 1.6; margin: 0 0 18px; }
+    button {
+      width: 100%; padding: 13px 16px; border: 0; border-radius: 12px; cursor: pointer;
+      background: #10b981; color: #04110c; font-size: 15px; font-weight: 700; transition: opacity 0.15s;
+    }
+    button:disabled { opacity: 0.55; cursor: default; }
+    #status { margin-top: 16px; font-size: 13px; line-height: 1.5; color: #a3b3c2; min-height: 20px; white-space: pre-line; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="wordmark">My<span>Music</span></div>
+    <h1>Masuk dengan Google</h1>
+    <p id="hint">Login dengan akun Google Anda untuk membuka aplikasi MyMusic di Windows.</p>
+    <button id="googleBtn" type="button">Lanjutkan dengan Google</button>
+    <p id="status"></p>
+  </div>
+
+  <!-- Konfigurasi Web App "Tonavera Web Auth" (nilai publik, bukan secret).
+       Nilai persis dari Firebase Console: apiKey AIzaSyDd5..., appId ...918584b8ea366fd9f98011. -->
+  <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-auth-compat.js"></script>
+  <script>
+    (function () {
+      'use strict';
+
+      // KEAMANAN: token (id_token/access_token), nonce lengkap, dan secret TIDAK
+      // PERNAH ditulis ke URL, sessionStorage, log, atau konsol. Yang boleh tampil
+      // hanyalah path status dan kode error Firebase (mis. 'auth/popup-blocked').
+
+      var SESS_PHASE = 'wa_phase';
+      var params = new URLSearchParams(window.location.search);
+      var port = params.get('port');
+      var nonce = params.get('nonce');
+      var btn = document.getElementById('googleBtn');
+      var hintEl = document.getElementById('hint');
+      var statusEl = document.getElementById('status');
+      var posting = false;
+
+      function setStatus(text, isError) {
+        statusEl.style.color = isError ? '#f87171' : '#a3b3c2';
+        statusEl.textContent = text;
+      }
+      function setPhase(name) {
+        try { sessionStorage.setItem(SESS_PHASE, name); } catch (e) { /* private mode */ }
+      }
+      function safeErrorLabel(err) {
+        var code = (err && (err.code || err.name)) || 'unknown';
+        return String(code).slice(0, 80); // hanya kode/nama, tidak ada credential/nonce
+      }
+
+      // --- Deteksi halaman dimuat ulang di tengah alur (penyebab 'pemilihan akun' berulang) ---
+      var prevPhase = null;
+      try { prevPhase = sessionStorage.getItem(SESS_PHASE); } catch (e) {}
+      if (prevPhase === 'authenticated' || prevPhase === 'submitting' ||
+          prevPhase === 'auth-both' || prevPhase === 'auth-id-only' || prevPhase === 'auth-access-only') {
+        setStatus(
+          'Terlihat halaman ini dimuat ulang setelah autentikasi. Jangan klik lagi — ' +
+          'tutup tab lalu buka kembali dari aplikasi. Jika ini terus berulang, ' +
+          'browser gagal meneruskan ke aplikasi Windows.',
+          true
+        );
+        try { sessionStorage.removeItem(SESS_PHASE); } catch (e) {}
+        return; // berhenti agar tidak memicu 'pemilihan akun' lagi
+      }
+
+      if (!/^[0-9]{1,5}$/.test(port || '') || !/^[A-Za-z0-9.\-_~]{16,128}$/.test(nonce || '')) {
+        setPhase('invalid-link');
+        setStatus('Tautan tidak valid. Tutup tab ini dan coba lagi dari aplikasi.', true);
+        btn.disabled = true;
+        return;
+      }
+
+      firebase.initializeApp({
+        apiKey: 'AIzaSyDd5s7Ka1445CX2Fcq5FpGlVvvEdPiEFc8',
+        authDomain: 'my-music-24b7b.firebaseapp.com',
+        projectId: 'my-music-24b7b',
+        storageBucket: 'my-music-24b7b.firebasestorage.app',
+        messagingSenderId: '303373323332',
+        appId: '1:303373323332:web:918584b8ea366fd9f98011',
+        measurementId: 'G-6JNJLYEZ0R'
+      });
+      var auth = firebase.auth();
+
+      function addHidden(form, name, value) {
+        var input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = name;
+        input.value = value;
+        form.appendChild(input);
+      }
+
+      btn.addEventListener('click', async function () {
+        if (posting || btn.disabled) { return; } // proteksi re-entrancy
+        btn.disabled = true;
+        setPhase('opening-popup');
+        setStatus('Membuka jendela Google…');
+
+        try {
+          var provider = new firebase.auth.GoogleAuthProvider();
+          var result = await auth.signInWithPopup(provider);
+          setPhase('authenticated');
+          setStatus('Autentikasi Google berhasil. Meneruskan ke aplikasi MyMusic…');
+
+          var credential = firebase.auth.GoogleAuthProvider.credentialFromResult(result);
+          var idToken = credential && credential.idToken;
+          var accessToken = credential && credential.accessToken;
+          var source = 'credentialFromResult';
+
+          // Cadangan 1: OAuthCredential pada UserCredential.credential.
+          if (!idToken && !accessToken && result.credential) {
+            idToken = result.credential.idToken || null;
+            accessToken = result.credential.accessToken || null;
+            source = 'userCredential.credential';
+          }
+          // Cadangan 2: token response mentah Firebase (oauthIdToken/oauthAccessToken).
+          if (!idToken && !accessToken && result._tokenResponse) {
+            var tr = result._tokenResponse;
+            idToken = tr.oauthIdToken || null;
+            accessToken = tr.oauthAccessToken || null;
+            source = 'tokenResponse';
+          }
+
+          var hasId = !!idToken;
+          var hasAccess = !!accessToken;
+
+          // Diagnostik AMAN: hanya boolean keberadaan + sumber (string tetap),
+          // TANPA nilai token/nonce/secret.
+          console.log('TokenPresence id=' + hasId + ' access=' + hasAccess + ' source=' + source);
+          setPhase(
+            hasId && hasAccess ? 'auth-both'
+            : hasAccess ? 'auth-access-only'
+            : hasId ? 'auth-id-only'
+            : 'auth-none'
+          );
+
+          // Hanya gagal bila KEDUANYA tidak ada; access_token saja tetap layak
+          // (Firebase mendukung path access-token-only via OAuthProvider).
+          if (!hasId && !hasAccess) {
+            throw { name: 'NoIdToken', message: 'Google tidak mengembalikan kredensial.' };
+          }
+
+          posting = true;
+          setPhase('submitting');
+          setStatus(
+            'Autentikasi Google berhasil.' +
+            (hasId ? '' : ' (id_token tidak ada, memakai access token saja)') +
+            ' Meneruskan ke aplikasi MyMusic…'
+          );
+
+          // Token dikirim lewat BODY form-POST (bukan URL). Navigasi top-level ke
+          // loopback tidak terikat CORS / Private Network Access.
+          var form = document.createElement('form');
+          form.method = 'POST';
+          form.action = 'http://127.0.0.1:' + port + '/finish';
+          addHidden(form, 'nonce', nonce);
+          if (hasId) { addHidden(form, 'idtoken', idToken); }
+          if (hasAccess) { addHidden(form, 'accesstoken', accessToken); }
+          document.body.appendChild(form);
+
+          // Watchdog: jika browser memblokir navigasi / aplikasi tidak merespons,
+          // tab akan tetap di sini dan pesan ini muncul (tanpa kredensial).
+          setTimeout(function () {
+            if (document.body.contains(form)) {
+              setPhase('post-blocked');
+              setStatus(
+                'Aplikasi MyMusic tidak menerima data dalam 5 detik.\n' +
+                'Tutup tab ini dan coba lagi dari aplikasi (browser mungkin memblokir koneksi ke 127.0.0.1).',
+                true
+              );
+            }
+          }, 5000);
+
+          form.submit();
+          // Setelah titik ini halaman berpindah; pesan di bawah hanya tampil bila
+          // navigasi gagal. Halaman sukses final dirender oleh APLIKASI Windows
+          // hanya setelah Firebase login di aplikasi berhasil.
+        } catch (err) {
+          var code = safeErrorLabel(err);
+          setPhase('error:' + code);
+          console.error('GoogleSignInFailure code=' + code); // hanya kode, tanpa credential/nonce
+          if (code.indexOf('popup-closed') >= 0 || code.indexOf('popup-blocked') >= 0) {
+            setStatus('Jendela Google ditutup atau diblokir oleh browser. Klik lagi untuk mencoba.', true);
+          } else if (code.indexOf('unauthorized-domain') >= 0) {
+            setStatus('origin/domain halaman tidak diizinkan di Firebase Auth (unauthorized-domain).\nKlik lagi setelah domain ditambahkan.', true);
+          } else if (code.indexOf('operation-not-allowed') >= 0) {
+            setStatus('Google Sign-In belum diaktifkan di Firebase (operation-not-allowed).', true);
+          } else {
+            setStatus('Gagal masuk Google (' + code + ').\nTutup tab dan coba lagi dari aplikasi.', true);
+          }
+          btn.disabled = false;
+        }
+      });
+    })();
+  </script>
+</body>
+</html>
